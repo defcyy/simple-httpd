@@ -1,7 +1,7 @@
 
 typedef struct dict_entry {
-	void *key;
-	void *value;
+	char *key;
+	char *value;
 	struct dict_entry *next;
 } dict_entry;
 
@@ -11,6 +11,6 @@ typedef struct dict_t {
 } dict_t;
 
 dict_t *dict_new(void);
-void dict_set(dict_t *d, char *key, void *value);
-void *dict_get(dict_t *d, char *key);
+int dict_set(dict_t *d,const char *key, const char *value);
+const char *dict_get(dict_t *d, const char *key);
 void dict_release(dict_t *d);

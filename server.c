@@ -7,6 +7,8 @@
 #include "server.h"
 #include "http_parser.h"
 #include "http.h"
+#include "common.h"
+#include "file.h"
 
 void error_exit(const char *message) {
 	perror(message);
@@ -21,9 +23,13 @@ static int on_message_begin(http_parser *parser) {
 static int on_url(http_parser *parser, const char *at, size_t length) {
 	DEBUG_LOG("on_url called\n");
 	request *req = (request *)parser->data;
-	req->url = malloc(length + 1);
-	memset(req->url, 0, length + 1);
-	memcpy(req->url, at, length);
+
+	char *url = malloc(length + 1);
+	memset(url, 0, length + 1);
+	strncpy(url, at, length);
+	set_request_url(req, url);
+	
+	free(url);
 	return 0;
 }
 
@@ -93,6 +99,19 @@ int main(int argc, char const *argv[])
     int addr_reuse = 1;
 	struct sockaddr_in serv_addr, client_addr;
 
+	for (int k = 1; k < argc; k++) {
+		if (strcmp(argv[k], "-p") == 0 || strcmp(argv[k], "--port") == 0) {
+			k++;
+			PORT = atoi(argv[k]);
+			DEBUG_LOG("get port from arg: %d\n", PORT);
+		}
+
+		if (strcmp(argv[k], "-r") == 0 || strcmp(argv[k], "--root") == 0) {
+			k++;
+			strcpy(ROOT, argv[k]);
+			DEBUG_LOG("get web root from arg: %s\n", ROOT);
+		} 
+	}
 
 	if ((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1 ) {
 		error_exit("socket init error");
@@ -116,43 +135,42 @@ int main(int argc, char const *argv[])
 	
 	DEBUG_LOG("socket init successful\n");
 
-	socklen_t addr_len = sizeof(client_addr);
+	socklen_t addr_len = sizeof(struct sockaddr_in);
 
-	char buffer[1024];
+	char buffer[1024] = { 0 };
 	size_t ret, nparsed;
-	http_parser *parser = malloc(sizeof(http_parser));
-	http_parser_settings *parser_settings = malloc(sizeof(http_parser_settings));
-	memset(parser_settings, 0, sizeof(parser_settings));
-	parser_settings->on_message_begin = on_message_begin;
-	parser_settings->on_url = on_url;
-	parser_settings->on_status = on_status;
-	parser_settings->on_header_field = on_header_field;
-	parser_settings->on_header_value = on_header_value;
-	parser_settings->on_headers_complete = on_headers_complete;
-	parser_settings->on_body = on_body;
-	parser_settings->on_message_complete = on_message_complete;
-	parser_settings->on_chunk_header = on_chunk_header;
-	parser_settings->on_chunk_complete = on_chunk_complete;
+	http_parser *parser;
+	http_parser_settings parser_settings = { 0 };
+
+	parser_settings.on_message_begin = on_message_begin;
+	parser_settings.on_url = on_url;
+	parser_settings.on_status = on_status;
+	parser_settings.on_header_field = on_header_field;
+	parser_settings.on_header_value = on_header_value;
+	parser_settings.on_headers_complete = on_headers_complete;
+	parser_settings.on_body = on_body;
+	parser_settings.on_message_complete = on_message_complete;
+	parser_settings.on_chunk_header = on_chunk_header;
+	parser_settings.on_chunk_complete = on_chunk_complete;
 
 	dict_t *headers;
 	dict_entry *header;
 	request *req;
-	response *resp;
 	for (;;) {
 
 		if ((conn = accept(sock, (struct sockaddr *)&client_addr, &addr_len)) == -1) {
 			error_exit("socket accept error");
 		}
 
-		memset(buffer, 0, sizeof(buffer));
+		parser = malloc(sizeof(http_parser));
 		ret = read(conn, buffer, sizeof(buffer));
 
 		req = request_new();
 		http_parser_init(parser, HTTP_REQUEST);
 		parser->data = req;
 
-		nparsed = http_parser_execute(parser, parser_settings, buffer, ret);
-		req->method = (char *) http_method_str((enum http_method) parser->method);
+		nparsed = http_parser_execute(parser, &parser_settings, buffer, ret);
+		set_request_method(req, (const char *) http_method_str((enum http_method) parser->method));
 
 		DEBUG_LOG("method: %s, url: %s\n", req->method, req->url);
 
@@ -160,31 +178,15 @@ int main(int argc, char const *argv[])
 		while (header != NULL) {
 			DEBUG_LOG("fied: %s, value: %s\n", (char *) header->key, (char *) header->value);
 			header = header->next;
-		}
+		}	
 
-		DEBUG_LOG("http response start ...\n");
-		resp = response_new();
+		file_serv(conn, req->url);
 
-		char *content = "<h1>Hello world!</h1>";
-		set_response_status(resp, 200);
-		set_response_header(resp, "Date", "Mon, 02 Oct 2017 05:59:24 GMT");
-		set_response_header(resp, "Server", "Test");
-		set_response_header(resp, "Accept-Ranges", "bytes");
-		set_response_header(resp, "Cache-Control", "max-age=86400");
-		set_response_header(resp, "Expires", "Tue, 03 Oct 2017 05:59:24 GMT");
-		set_response_header(resp, "Connection", "Keep-Alive");
-		set_response_header(resp, "Content-Type", "text/html");
-		set_response_content(resp, (void *)content, strlen(content) + 1);
-
-		send_response(conn, resp);
-
-		close(conn);
 		request_release(req);
-		response_release(resp);
+		free(parser);
 	}
 
 	free(parser);
-	free(parser_settings);
 
 	return EXIT_SUCCESS;
 }

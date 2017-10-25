@@ -1,7 +1,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
-#include "server.h"
+#include "common.h"
 #include "http.h"
 
 request *request_new(void) {
@@ -13,6 +13,16 @@ request *request_new(void) {
 	req->body = NULL;
 
 	return req;
+}
+
+void set_request_url(request *req, const char *url) {
+    req->url = malloc(strlen(url) + 1);
+    strcpy(req->url, url);
+}
+
+void set_request_method(request *req, const char *method) {
+    req->method = malloc(strlen(method) + 1);
+    strcpy(req->method, method);
 }
 
 void request_release(request *req) {
@@ -60,13 +70,13 @@ void set_response_header(response *resp, char *key, void *value) {
 }
 
 void set_response_content(response *resp, void *content, size_t length) {
-	resp->content = malloc(length);
+    resp->content = calloc(1, length);
 	memcpy(resp->content, content, length);
 	resp->length = length;
 
-	char *len = malloc(sizeof(length) + 1);
+	char len[11] = { 0 };
 	sprintf(len, "%u", (unsigned int)length);
-	set_response_header(resp, "Content-Length", len);
+    set_response_header(resp, "Content-Length", len);
 }
 
 const char *get_status_description(unsigned int status) {
@@ -195,35 +205,44 @@ const char *get_status_description(unsigned int status) {
 }
 
 void send_response(int conn, response *resp) {
-	char *data;
-	unsigned int header_length;
-	int ret, total_length, line_length = 0;
+ 	unsigned int header_length;
+    int ret, total_length, line_length = 0;
+    char *buff;
 
 	const char *status_desc = get_status_description(resp->status);
-	line_length = strlen(HTTP_PROTOCOL) + 5 + strlen(status_desc) + strlen(HTTP_RESPONSE_SEPERATOR);
-	data = malloc(line_length + 1);
-	sprintf(data, "%s %u %s%s", HTTP_PROTOCOL, resp->status, status_desc, HTTP_RESPONSE_SEPERATOR);
+    line_length = strlen(HTTP_PROTOCOL) + strlen(status_desc) + strlen(HTTP_RESPONSE_SEPERATOR) + 5;
+    buff = calloc(line_length + 1, sizeof(char));
+	sprintf(buff, "%s %u %s%s", HTTP_PROTOCOL, resp->status, status_desc, HTTP_RESPONSE_SEPERATOR);
 
 	total_length = line_length;
 
 	dict_entry *header = resp->headers->data;
 	while (header != NULL) {
-		line_length = strlen(header->key) + strlen((char *)header->value) + 2 + strlen(HTTP_RESPONSE_SEPERATOR);
-		data = (char *) realloc(data,  total_length + line_length + 1);
-		sprintf(data + total_length, "%s: %s%s", (char *)header->key, (char *)header->value, HTTP_RESPONSE_SEPERATOR);
-		total_length += line_length;
+		line_length = strlen(header->key) + strlen((char *)header->value) + strlen(HTTP_RESPONSE_SEPERATOR) + 2;
+        buff = realloc(buff, strlen(buff) + line_length + 1);
+		sprintf(buff + total_length, "%s: %s%s", (char *)header->key, (char *)header->value, HTTP_RESPONSE_SEPERATOR);
+        total_length += line_length;
 		header = header->next;
 	}
 
-	data = (char *) realloc(data, total_length + strlen(HTTP_RESPONSE_SEPERATOR));
-	sprintf(data + total_length, "%s", HTTP_RESPONSE_SEPERATOR);
-	total_length += strlen(HTTP_RESPONSE_SEPERATOR);
-	ret = send(conn, data, strlen(data), 0);
+    buff = realloc(buff, strlen(buff) + strlen(HTTP_RESPONSE_SEPERATOR) + 1);
+    sprintf(buff + total_length, "%s", HTTP_RESPONSE_SEPERATOR);
+
+	ret = send(conn, buff, strlen(buff), 0);
 	DEBUG_LOG("send headers ret: %d\n", ret);
-	DEBUG_LOG("response header: \n%s", data);
+	DEBUG_LOG("response header: \n%s", buff);
 	ret = send(conn, resp->content, resp->length, 0);
 	DEBUG_LOG("send body ret: %d\n", ret);
 	DEBUG_LOG("response content: \n%s\n", (char *) resp->content);
 
-	free(data);
+    free(buff);
+}
+
+void mime_types_init(void) {
+    mime_types = dict_new();
+    dict_set(mime_types, ".html", "text/html");
+}
+
+void mime_types_release(void) {
+    dict_release(mime_types);
 }
